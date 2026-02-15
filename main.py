@@ -31,6 +31,9 @@ def _build_candles(yf_symbol: str, days: int):
         auto_adjust=False,
         progress=False,
     )
+        # إذا رجعت الأعمدة كـ MultiIndex مثل ('Open', 'MSFT') نحولها لأسماء بسيطة
+    if isinstance(df.columns, MultiIndex):
+        df.columns = [c[0] for c in df.columns]
 
     # لا توجد أي بيانات
     if df is None or df.empty:
