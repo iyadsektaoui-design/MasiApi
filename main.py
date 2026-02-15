@@ -5,111 +5,103 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta, timezone
 import requests
+import random
 
-app = FastAPI(title="CasaBourse AI API")
+app = FastAPI()
 
-# إعدادات CORS للسماح بالاتصال من تطبيقات الويب
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 def _build_candles(yf_symbol: str, days: int):
-    try:
-        # 1. إنشاء جلسة متصفح حقيقية لتجاوز حظر ياهو للبيانات الدولية
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Connection': 'keep-alive'
-        })
+    # 1. قائمة بمتصفحات مختلفة لتبديل الهوية (لخداع نظام الحماية في ياهو)
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ]
 
-        # 2. إعداد الكائن واستخدام فترات زمنية ثابتة (أكثر استقراراً للمؤشرات)
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': random.choice(user_agents),
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Origin': 'https://finance.yahoo.com',
+        'Referer': 'https://finance.yahoo.com',
+    })
+
+    try:
+        # 2. محاولة جلب البيانات بطريقة الـ Period بدلاً من التاريخ المحدد
         ticker_obj = yf.Ticker(yf_symbol, session=session)
         
-        # نختار فترة تغطي عدد الأيام المطلوب
-        if days <= 30:
-            period = "1mo"
-        elif days <= 250:
-            period = "1y"
-        else:
-            period = "5y"
+        # نستخدم 3mo كحد أدنى للمؤشرات لضمان وجود بيانات
+        fetch_period = "3mo" if days <= 60 else "1y"
+        
+        # طلب البيانات مع إيقاف auto_adjust لضمان ثبات الأعمدة
+        df = ticker_obj.history(period=fetch_period, interval="1d", auto_adjust=True)
 
-        # جلب البيانات
-        df = ticker_obj.history(period=period, interval="1d")
-
-        # 3. حل مشكلة الـ MultiIndex (تسطيح الأعمدة المتداخلة)
+        # 3. تسطيح الأعمدة (Flattening)
         if isinstance(df.columns, MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # 4. معالجة حالات البيانات الفارغة (خاصة بمؤشر MASI)
+        # 4. إذا فشل المؤشر المغربي ^MASI، نجرب الرمز المباشر للبورصة
+        if df.empty and "MASI" in yf_symbol:
+            df = yf.download("MASI.CAS", period="1mo", session=session, progress=False)
+            if isinstance(df.columns, MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+
         if df.empty:
-            if "MASI" in yf_symbol:
-                # محاولة الرمز البديل للمغرب
-                df = yf.Ticker("MASI.CAS", session=session).history(period="1mo")
-                if isinstance(df.columns, MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-            
-            if df.empty:
-                raise ValueError(f"No data returned for {yf_symbol}")
+            raise ValueError(f"No data available for {yf_symbol}")
 
-        # 5. تنظيف وترتيب البيانات
-        df = df.sort_index()
-        df = df.tail(days) # نأخذ فقط الأيام المطلوبة من النهاية
-
+        # 5. تنظيف البيانات واقتطاع المطلوب
+        df = df.sort_index().tail(days)
+        
         candles = []
         for ts, row in df.iterrows():
-            # التعامل مع القيم المفقودة في الحجم (Volume) خاصة للمؤشرات
-            vol = float(row["Volume"]) if "Volume" in row and pd.notna(row["Volume"]) else 0
-            
-            candles.append({
-                "time": ts.strftime('%Y-%m-%d'),
-                "open": round(float(row["Open"]), 2),
-                "high": round(float(row["High"]), 2),
-                "low": round(float(row["Low"]), 2),
-                "close": round(float(row["Close"]), 2),
-                "volume": vol
-            })
-        
+            # التأكد من وجود الأعمدة المطلوبة
+            if all(col in df.columns for col in ['Open', 'High', 'Low', 'Close']):
+                candles.append({
+                    "time": ts.strftime('%Y-%m-%d'),
+                    "open": round(float(row["Open"]), 2),
+                    "high": round(float(row["High"]), 2),
+                    "low": round(float(row["Low"]), 2),
+                    "close": round(float(row["Close"]), 2),
+                    "volume": int(row.get("Volume", 0)) if pd.notna(row.get("Volume")) else 0
+                })
         return candles
 
     except Exception as e:
-        print(f"Error for {yf_symbol}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/")
-def read_root():
-    return {"status": "online", "message": "API is running. Use /{ticker} to get data."}
+        raise Exception(f"Yahoo Provider Error: {str(e)}")
 
 @app.get("/{ticker}")
 def get_stock(ticker: str, days: int = 60):
     t = ticker.strip().upper()
     
-    # منطق تحويل الرموز الذكي:
-    # 1. إذا كان الرمز مؤشراً معروفاً
-    if t in ["MASI", "IXIC", "GSPC", "DJI", "FTSE"]:
+    # تصحيح منطق الرموز
+    if t == "MASI":
+        yf_symbol = "^MASI"
+    elif t in ["IXIC", "GSPC", "DJI"]:
         yf_symbol = f"^{t}"
-    
-    # 2. إذا كان يحتوي بالفعل على نقطة أو يبدأ بـ ^
-    elif "." in t or t.startswith("^"):
-        yf_symbol = t
-        
-    # 3. إذا كان سهماً عالمياً مشهوراً لا يحتاج لاحقة
-    elif t in ["MSFT", "AAPL", "GOOGL", "TSLA", "NVDA", "BTC-USD"]:
-        yf_symbol = t
-        
-    # 4. أي شيء آخر نعتبره سهماً مغربياً
-    else:
+    elif "." not in t and t not in ["MSFT", "AAPL", "NVDA"]:
         yf_symbol = f"{t}.MA"
+    else:
+        yf_symbol = t
 
-    data = _build_candles(yf_symbol, days)
-    
-    return {
-        "ticker": t,
-        "yf_symbol": yf_symbol,
-        "count": len(data),
-        "candles": data
-    }
+    try:
+        data = _build_candles(yf_symbol, days)
+        return {
+            "status": "success",
+            "ticker": t,
+            "yf_symbol": yf_symbol,
+            "candles": data
+        }
+    except Exception as e:
+        # عرض الخطأ بشكل أوضح للتشخيص
+        return {
+            "status": "error",
+            "message": str(e),
+            "tip": "If this is a Moroccan stock, Yahoo might be blocking the server IP. Try again in a few minutes."
+        }
