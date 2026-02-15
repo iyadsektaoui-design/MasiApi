@@ -16,32 +16,30 @@ app.add_middleware(
 
 def _build_candles(yf_symbol: str, days: int):
     try:
-        # 1. تركنا المكتبة تدير الجلسة بنفسها (تم حذف requests session)
+        # الحل: حذفنا الـ session تماماً كما طلبت الرسالة
         ticker_obj = yf.Ticker(yf_symbol)
         
-        # اختيار الفترة
-        period = "3mo" if days <= 60 else "1y"
+        # نستخدم period لجلب البيانات
+        fetch_period = "3mo" if days <= 60 else "1y"
         
-        # 2. طلب البيانات (المكتبة ستستخدم curl_cffi داخلياً إذا كانت متوفرة)
-        df = ticker_obj.history(period=period, interval="1d", auto_adjust=True)
+        # جلب البيانات (المكتبة ستستخدم curl_cffi داخلياً إذا كانت مثبتة)
+        df = ticker_obj.history(period=fetch_period, interval="1d", auto_adjust=True)
 
-        # 3. تسطيح الأعمدة (التعامل مع MultiIndex للمؤشرات)
+        # تسطيح الأعمدة (Flattening)
         if isinstance(df.columns, MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # 4. معالجة البيانات الفارغة (خاصة MASI)
         if df.empty:
-            # محاولة أخيرة برمز بديل للمغرب
+            # محاولة بديلة لـ MASI إذا فشل الرمز الأول
             if "MASI" in yf_symbol:
-                alt_ticker = yf.Ticker("MASI.CAS")
-                df = alt_ticker.history(period="1mo")
+                df = yf.Ticker("MASI.CAS").history(period="1mo")
                 if isinstance(df.columns, MultiIndex):
                     df.columns = df.columns.get_level_values(0)
             
             if df.empty:
                 raise ValueError(f"No data returned for {yf_symbol}")
 
-        # 5. تنظيف واقتطاع البيانات
+        # تنظيف واقتطاع البيانات
         df = df.sort_index().tail(days)
         
         candles = []
@@ -57,13 +55,13 @@ def _build_candles(yf_symbol: str, days: int):
         return candles
 
     except Exception as e:
-        raise Exception(f"Internal Data Error: {str(e)}")
+        raise Exception(f"Data Fetch Error: {str(e)}")
 
 @app.get("/{ticker}")
 def get_stock(ticker: str, days: int = 60):
     t = ticker.strip().upper()
     
-    # تحويل الرموز
+    # تحويل الرموز (Logic Fix)
     if t == "MASI":
         yf_symbol = "^MASI"
     elif t in ["IXIC", "GSPC", "DJI"]:
