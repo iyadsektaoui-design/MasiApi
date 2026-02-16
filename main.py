@@ -1,6 +1,6 @@
 import sqlite3
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -14,16 +14,18 @@ app.add_middleware(
 
 DB_NAME = "stocks_morocco.db"
 
-@app.get("/data/{symbol}")
+# لاحظ هنا المسار أصبح /{symbol} مباشرة ليتوافق مع رابطك الذي يعمل
+@app.get("/{symbol}")
 def get_stock_data(symbol: str, days: int = Query(None)):
     try:
         conn = sqlite3.connect(DB_NAME)
+        # تحويل اسم الشركة ليتوافق مع اسم الجدول (تبديل المسافات بشرطات سفلية)
         table_name = symbol.replace(" ", "_")
         
-        # التأكد من جلب البيانات تنازلياً للحصول على الأحدث أولاً
+        # 1. بناء الاستعلام مع ترتيب تنازلي لجلب الأحدث أولاً
         query = f"SELECT * FROM {table_name} ORDER BY Date DESC"
         
-        # إضافة LIMIT مباشرة في استعلام SQL إذا وُجد متغير days
+        # 2. تطبيق الـ LIMIT فقط إذا تم إرسال الرقم في الرابط
         if days is not None and days > 0:
             query += f" LIMIT {days}"
             
@@ -31,9 +33,9 @@ def get_stock_data(symbol: str, days: int = Query(None)):
         conn.close()
 
         if df.empty:
-            return {"status": "error", "message": "No data found"}
+            return {"status": "error", "message": "لم يتم العثور على بيانات لهذه الشركة"}
 
-        # قلب البيانات لتصبح من الأقدم للأحدث للرسم البياني
+        # 3. قلب البيانات لتصبح من الأقدم للأحدث (ضروري جداً للرسم البياني)
         df = df.iloc[::-1]
 
         candles = []
@@ -53,4 +55,4 @@ def get_stock_data(symbol: str, days: int = Query(None)):
             "candles": candles
         }
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        return {"status": "error", "message": str(e)}
