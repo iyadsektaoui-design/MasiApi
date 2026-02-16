@@ -43,6 +43,8 @@ def get_live_data(google_symbol):
         # البحث عن خلية السعر
         price_str = soup.find("div", {"class": "YMlS7e"}).text
         price = float(price_str.replace(",", "").replace("MAD", "").strip())
+        # أضف هذا السطر داخل دالة get_live_data في ملف update_db.py
+        print(f"جاري فحص جوجل للرمز: {google_symbol}...")
         return price
     except Exception as e:
         print(f"⚠️ فشل جلب {google_symbol}: {e}")
