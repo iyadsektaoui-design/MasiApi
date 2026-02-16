@@ -14,23 +14,34 @@ SYMBOLS = {
 }
 
 def get_official_price(path):
-    """جلب السعر مباشرة من ملفات JSON الخاصة بموقع البورصة"""
+    """جلب السعر مع تعطيل التحقق من شهادة الـ SSL لتففي الخطأ"""
     try:
-        # سنحاول جلب السعر من الرابط المباشر
-        # ملاحظة: buildId يمكن تجنبه أحياناً باستخدام الرابط المبسط أو البحث عنه
+        # الرابط الرسمي المباشر
         url = f"https://www.casablanca-bourse.com/api/market/{path}" 
         
-        # إذا لم يعمل الرابط أعلاه، نستخدم الرابط الذي اقترحته أنت مع محاولة جلب buildId تلقائياً
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=15)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
+        # إضافة verify=False لتجاهل خطأ شهادة الأمان SSL
+        response = requests.get(url, headers=headers, timeout=15, verify=False)
+        
+        # لمنع ظهور رسالة تحذير مزعجة في السجلات (اختياري)
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
         data = response.json()
         
-        # استخراج السعر (Price/Last) من الـ JSON
-        # الهيكل المتوقع عادة يكون data['result']['price'] أو ما يشابهه
-        price = data.get('last_price') or data.get('close') or data.get('value')
-        return float(price)
+        # استخراج السعر بناءً على بنية JSON المتوقعة
+        # عادة ما يكون السعر في حقل 'last_price' أو 'price'
+        price = data.get('last_price') or data.get('price') or data.get('value')
+        print(price)
+        if price:
+            return float(price)
+        return None
+        
     except Exception as e:
-        print(f"❌ فشل جلب {path} من الموقع الرسمي: {e}")
+        print(f"❌ فشل جلب {path}: {str(e)}")
         return None
 
 def update_database():
