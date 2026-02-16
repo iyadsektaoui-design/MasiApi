@@ -1,7 +1,8 @@
 import sqlite3
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
 
 app = FastAPI()
 
@@ -14,29 +15,30 @@ app.add_middleware(
 
 DB_NAME = "stocks_morocco.db"
 
-@app.get("/stocks")
-def list_companies():
-    """جلب قائمة بأسماء الشركات المتاحة في القاعدة"""
-    conn = sqlite3.connect(DB_NAME)
-    query = "SELECT name FROM sqlite_master WHERE type='table';"
-    tables = pd.read_sql_query(query, conn)
-    conn.close()
-    return {"companies": tables['name'].tolist()}
-
 @app.get("/data/{symbol}")
-def get_stock_data(symbol: str):
-    """جلب بيانات شركة معينة لتقديمها لتطبيق فلوتر"""
+def get_stock_data(symbol: str, days: Optional[int] = Query(None, description="عدد الأيام الأخيرة المطلوبة")):
+    """
+    جلب بيانات شركة معينة مع إمكانية تحديد عدد الأيام الأخيرة.
+    مثال: /data/Alliances?days=60
+    """
     try:
         conn = sqlite3.connect(DB_NAME)
-        # التأكد من تنظيف اسم الجدول لمنع SQL Injection
         table_name = symbol.replace(" ", "_")
         
-        # جلب البيانات وترتيبها من الأقدم للأحدث (مهم جداً للرسم البياني)
-        query = f"SELECT * FROM {table_name} ORDER BY Date ASC"
+        # إذا طلب المستخدم عدداً معيناً من الأيام، نستخدم LIMIT مع ترتيب تنازلي أولاً لجلب الأحدث
+        if days:
+            query = f"SELECT * FROM {table_name} ORDER BY Date DESC LIMIT {days}"
+        else:
+            # إذا لم يحدد، نجلب كل البيانات
+            query = f"SELECT * FROM {table_name} ORDER BY Date DESC"
+            
         df = pd.read_sql_query(query, conn)
         conn.close()
 
-        # تحويل البيانات لصيغة الشموع المتوافقة مع فلوتر
+        # بما أننا جلبنا الأحدث (DESC)، نحتاج لقلب القائمة (Reverse) 
+        # لكي يظهر الرسم البياني في فلوتر من الأقدم للأحدث بشكل صحيح
+        df = df.iloc[::-1]
+
         candles = []
         for _, row in df.iterrows():
             candles.append({
@@ -50,8 +52,9 @@ def get_stock_data(symbol: str):
         return {
             "status": "success",
             "symbol": symbol,
+            "requested_days": days if days else "all",
             "count": len(candles),
             "candles": candles
         }
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Company {symbol} not found or error occurred.")
+        raise HTTPException(status_code=404, detail=f"خطأ: التأكد من اسم الشركة أو قاعدة البيانات. {str(e)}")
