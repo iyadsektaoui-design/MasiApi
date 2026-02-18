@@ -1,12 +1,9 @@
 fastapi
 uvicorn[standard]
-yfinance
 pandas
 requests
 fastapi
 uvicorn
-yfinance>=0.2.50
 uvicorn
 curl_cffi
-fastapi==0.115.5
 
