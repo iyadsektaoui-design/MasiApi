@@ -31,6 +31,20 @@ def health():
     return {"status": "ok", "db_exists": os.path.exists(DB_PATH)}
 
 
+@app.get("/company/list")
+def list_all_companies():
+    """إرجاع قائمة بجميع الشركات المدرجة (جميع الرموز في جدول Company)"""
+    if not os.path.exists(DB_PATH):
+        raise HTTPException(500, "قاعدة البيانات غير موجودة.")
+
+    conn = get_conn()
+    cur = conn.execute("SELECT DISTINCT symbol, name FROM Company ORDER BY symbol ASC")
+    rows = [dict(r) for r in cur.fetchall()]
+
+    return {
+        "count": len(rows),
+        "symbols": rows
+    }
 @app.get("/company/latest")
 def latest_day():
     """إرجاع آخر يوم متوفر بالكامل في جدول Company"""
