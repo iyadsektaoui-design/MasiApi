@@ -1,0 +1,94 @@
+name: Build OpenAPI Docs (EN/AR) + Publish
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn[standard] requests
+
+      - name: Export OpenAPI (EN/AR)
+        run: |
+          python scripts/export_openapi.py
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install redoc-cli
+        run: |
+          npm i -g redoc-cli
+
+      - name: Build Redoc HTML (EN)
+        run: |
+          npx redoc-cli bundle docs/openapi-en.json -o docs/index-en.html --title "Morocco Market API – English"
+
+      - name: Build Redoc HTML (AR)
+        run: |
+          npx redoc-cli bundle docs/openapi-ar.json -o docs/index-ar.html --title "واجهة سوق المغرب – العربية"
+
+      - name: Download Arabic font (Noto Sans Arabic)
+        run: |
+          curl -L -o docs/NotoSansArabic-VariableFont_wdth,wght.ttf \
+            https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-VariableFont_wdth,wght.ttf
+
+      - name: Inject RTL + Font CSS into Arabic HTML
+        run: |
+          python scripts/postprocess_html.py docs/index-ar.html
+
+      - name: Install wkhtmltopdf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wkhtmltopdf
+
+      - name: Generate PDFs from HTML
+        run: |
+          wkhtmltopdf docs/index-en.html docs/openapi-en.pdf
+          wkhtmltopdf docs/index-ar.html docs/openapi-ar.pdf
+
+      - name: Commit docs to main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          git commit -m "docs: update OpenAPI HTML/PDF (EN/AR)" || echo "No changes to commit"
+          git push
+
+      # ===== Optional: Publish to GitHub Pages (gh-pages) =====
+      - name: Upload artifact (docs)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy-pages:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
