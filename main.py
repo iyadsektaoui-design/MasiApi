@@ -306,4 +306,4 @@ def history_latest(symbol: str):
         if not row:
             raise HTTPException(status_code=404, detail="لا توجد بيانات لهذا الرمز.")
         return dict(row)
-``
+
