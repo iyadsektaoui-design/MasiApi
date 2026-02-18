@@ -6,7 +6,7 @@ import sys
 # نحاول استيراد تطبيق FastAPI من main.py أو app.py
 app = None
 try:
-    from main import app as _app
+    from MasiAPI.main import app as _app
     app = _app
 except Exception:
     try:
