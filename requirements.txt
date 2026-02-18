@@ -9,5 +9,4 @@ yfinance>=0.2.50
 uvicorn
 curl_cffi
 fastapi==0.115.5
-uvicorn[standard]==0.30.6
-requests==2.32.3
+
