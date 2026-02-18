@@ -4,12 +4,15 @@ import sqlite3
 from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import FileResponse
+import json
 
 DB_PATH = os.getenv("DB_PATH", "./stocks_morocco.db")
 
 app = FastAPI(
     title="Morocco Market API",
-    description="API لقراءة بيانات البورصة المغربية من جدول Company فقط.",
+    description="API لقراءة بيانات البورصة المغربية من جدول Company و DailyVariation.",
     version="2.0.0"
 )
 
@@ -31,21 +34,51 @@ def get_conn():
 
 def parse_date(d: str):
     """
-    تحويل التاريخ من DD/MM/YYYY إلى كائن datetime
+    تحويل التاريخ إلى كائن datetime.
+    ندعم عدة صيغ شائعة:
+    - YYYY-MM-DD
+    - YYYY-MM-DD HH:MM:SS
+    - DD/MM/YYYY
+    - DD/MM/YYYY HH:MM:SS
+    إرجاع None إن لم نستطع التحويل.
     """
-    try:
-        return datetime.strptime(d, "%d/%m/%Y")
-    except:
+    if not d:
         return None
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%d/%m/%Y %H:%M:%S"):
+        try:
+            return datetime.strptime(d, fmt)
+        except Exception:
+            continue
+    return None
 
 
-def sort_desc_by_date(rows):
+def parse_timestamp(ts: str):
     """
-    ترتيب السجلات تنازليًا حسب التاريخ (الأحدث → الأقدم)
+    تحويل حقل timestamp من جدول DailyVariation إلى datetime.
+    ندعم صيغ ISO مع أو بدون وقت، و ISO T، وأيضاً dd/mm/YYYY إذا وجد.
+    """
+    if not ts:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(ts, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def sort_desc_by_date(rows, key_field="date"):
+    """
+    ترتيب السجلات تنازليًا حسب حقل تاريخ/توقيت محدد (افتراضي 'date').
+    يحاول تحويل الحقل إلى datetime بمساعدة parse_date / parse_timestamp.
     """
     def keyfn(r):
-        d = parse_date(r["date"])
-        return d if d else datetime.min
+        val = r.get(key_field)
+        if key_field == "timestamp":
+            dt = parse_timestamp(val)
+        else:
+            dt = parse_date(val)
+        return dt if dt else datetime.min
     return sorted(rows, key=keyfn, reverse=True)
 
 
@@ -71,240 +104,39 @@ def health():
     return {
         "status": "ok",
         "db_exists": os.path.exists(DB_PATH),
-        "db_path": DB_PATH
+        "db_path": os.path.abspath(DB_PATH)
     }
 
 
-# ---------------------------- 2) قائمة الشركات ---------------------------- #
+# ---------------------------- 2) قائمة الشركات (مع aggregation) ---------------------------- #
 
 @app.get("/company/list")
 def list_companies():
     """
     إرجاع قائمة الشركات (symbol + name) مرتبة أبجديًا حسب الاسم
+    بالإضافة لآخر سعر وآخر تاريخ متوفر لكل رمز (aggregation).
     """
     if not os.path.exists(DB_PATH):
         raise HTTPException(500, "قاعدة البيانات غير موجودة.")
 
     conn = get_conn()
-    cur = conn.execute("SELECT DISTINCT symbol, name FROM Company")
+    cur = conn.cursor()
+
+    # نستخدم انضمام على مجمّع التاريخ للحصول على أحدث صف لكل رمز
+    cur.execute("""
+        SELECT c.symbol, c.name, c.price, c.change, c.volume, c.date
+        FROM Company c
+        JOIN (
+            SELECT symbol, MAX(date) AS max_date
+            FROM Company
+            GROUP BY symbol
+        ) m ON c.symbol = m.symbol AND c.date = m.max_date
+        ORDER BY LOWER(c.name) ASC
+    """)
 
     rows = [dict(r) for r in cur.fetchall()]
-
-    # ترتيب أبجدي حسب name
-    rows_sorted = sorted(rows, key=lambda x: x["name"])
 
     return {
-        "count": len(rows_sorted),
-        "companies": rows_sorted
-    }
-
-
-# ---------------------------- 3) آخر يوم متوفر ---------------------------- #
-
-@app.get("/company/latest")
-def latest_day():
-    """
-    إرجاع جميع السجلات لأحدث تاريخ موجود في قاعدة البيانات
-    """
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(500, "قاعدة البيانات غير موجودة")
-
-    conn = get_conn()
-    cur = conn.execute("SELECT DISTINCT date FROM Company")
-    dates = [r[0] for r in cur.fetchall()]
-
-    if not dates:
-        return {"date": None, "rows": []}
-
-    # تحويل وفرز التواريخ
-    parsed = [(d, parse_date(d)) for d in dates if parse_date(d)]
-    last_date = sorted(parsed, key=lambda x: x[1], reverse=True)[0][0]
-
-    cur = conn.execute(
-        "SELECT symbol, name, price, change, volume, date "
-        "FROM Company WHERE date=?",
-        (last_date,)
-    )
-
-    rows = [dict(r) for r in cur.fetchall()]
-    rows_sorted = sort_desc_by_date(rows)
-
-    return {"date": last_date, "count": len(rows_sorted), "rows": rows_sorted}
-
-
-# ---------------------------- 4) حسب رمز معين ---------------------------- #
-
-@app.get("/company/symbol")
-def company_by_symbol(
-    symbol: str = Query(...),
-    date_from: str = None,
-    date_to: str = None
-):
-    """
-    إرجاع بيانات رمز معين مع إمكانية تحديد فترة زمنية
-    جميع النتائج مرتبة من الأحدث للأقدم
-    """
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(500, "قاعدة البيانات غير موجودة.")
-
-    conn = get_conn()
-
-    query = "SELECT * FROM Company WHERE symbol=?"
-    params = [symbol]
-
-    if date_from:
-        query += " AND date >= ?"
-        params.append(date_from)
-
-    if date_to:
-        query += " AND date <= ?"
-        params.append(date_to)
-
-    cur = conn.execute(query, params)
-    rows = [dict(r) for r in cur.fetchall()]
-
-    rows_sorted = sort_desc_by_date(rows)
-
-    return {
-        "symbol": symbol,
-        "count": len(rows_sorted),
-        "rows": rows_sorted
-    }
-
-
-# ---------------------------- 5) حسب فترة محددة (week, month...) ---------------------------- #
-
-@app.get("/company/range")
-def range_period(
-    symbol: str = Query(...),
-    period: str = Query(..., description="week, month, 3months, 6months, year, 3years")
-):
-    """
-    إرجاع بيانات رمز معين لفترة محددة
-    """
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(500, "قاعدة البيانات غير موجودة.")
-
-    days = period_to_days(period)
-    if not days:
-        raise HTTPException(400, "الفترة غير صحيحة.")
-
-    today = datetime.today()
-    date_limit = today - timedelta(days=days)
-
-    conn = get_conn()
-    cur = conn.execute(
-        "SELECT * FROM Company WHERE symbol=?",
-        (symbol,)
-    )
-
-    rows = [dict(r) for r in cur.fetchall()]
-
-    # فلترة حسب التاريخ
-    filtered = []
-    for r in rows:
-        d = parse_date(r["date"])
-        if d and d >= date_limit:
-            filtered.append(r)
-
-    filtered_sorted = sort_desc_by_date(filtered)
-
-    return {
-        "symbol": symbol,
-        "period": period,
-        "count": len(filtered_sorted),
-        "rows": filtered_sorted
-    }
-
-
-# ---------------------------- 6) نفس الفترة لجميع الشركات ---------------------------- #
-
-@app.get("/company/range/all")
-def range_all(period: str):
-    """
-    إرجاع بيانات جميع الشركات لفترة معينة
-    """
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(500, "قاعدة البيانات غير موجودة.")
-
-    days = period_to_days(period)
-    if not days:
-        raise HTTPException(400, "الفترة غير صحيحة.")
-
-    today = datetime.today()
-    date_limit = today - timedelta(days=days)
-
-    conn = get_conn()
-    cur = conn.execute("SELECT * FROM Company")
-
-    rows = [dict(r) for r in cur.fetchall()]
-
-    # فلترة حسب التاريخ
-    filtered = []
-    for r in rows:
-        d = parse_date(r["date"])
-        if d and d >= date_limit:
-            filtered.append(r)
-
-    filtered_sorted = sort_desc_by_date(filtered)
-
-    return {
-        "period": period,
-        "count": len(filtered_sorted),
-        "rows": filtered_sorted
-    }
-
-
-# ---------------------------- 7) جميع البيانات ---------------------------- #
-
-@app.get("/company/all")
-def all_data():
-    """
-    إرجاع جميع السجلات لجميع الشركات
-    مرتبة من الأحدث للأقدم
-    """
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(500, "قاعدة البيانات غير موجودة.")
-
-    conn = get_conn()
-    cur = conn.execute("SELECT * FROM Company")
-
-    rows = [dict(r) for r in cur.fetchall()]
-    rows_sorted = sort_desc_by_date(rows)
-
-    return {"count": len(rows_sorted), "rows": rows_sorted}
-    from fastapi.openapi.utils import get_openapi
-import json
-
-
-@app.get("/export/openapi")
-def export_openapi():
-    """
-    تصدير ملف OpenAPI JSON كامل للتوثيق
-    """
-    schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
-        routes=app.routes
-    )
-
-    # حفظ الملف على الخادم (Render)
-    with open("openapi.json", "w", encoding="utf-8") as f:
-        json.dump(schema, f, ensure_ascii=False, indent=2)
-
-    return {
-        "status": "generated",
-        "file": "openapi.json",
-        "download_url": "/openapi.json"
-    }
-    from fastapi.responses import FileResponse
-
-@app.get("/openapi.json")
-def serve_openapi_file():
-    """
-    تنزيل ملف OpenAPI JSON الذي تم توليده
-    """
-    if not os.path.exists("openapi.json"):
-        raise HTTPException(404, "الملف غير موجود. قم بتوليده عبر /export/openapi")
-    return FileResponse("openapi.json", media_type="application/json")
+        "count": len(rows),
+        "companies": rows
+   *
