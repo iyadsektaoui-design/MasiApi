@@ -273,3 +273,38 @@ def all_data():
     rows_sorted = sort_desc_by_date(rows)
 
     return {"count": len(rows_sorted), "rows": rows_sorted}
+    from fastapi.openapi.utils import get_openapi
+import json
+
+
+@app.get("/export/openapi")
+def export_openapi():
+    """
+    تصدير ملف OpenAPI JSON كامل للتوثيق
+    """
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes
+    )
+
+    # حفظ الملف على الخادم (Render)
+    with open("openapi.json", "w", encoding="utf-8") as f:
+        json.dump(schema, f, ensure_ascii=False, indent=2)
+
+    return {
+        "status": "generated",
+        "file": "openapi.json",
+        "download_url": "/openapi.json"
+    }
+    from fastapi.responses import FileResponse
+
+@app.get("/openapi.json")
+def serve_openapi_file():
+    """
+    تنزيل ملف OpenAPI JSON الذي تم توليده
+    """
+    if not os.path.exists("openapi.json"):
+        raise HTTPException(404, "الملف غير موجود. قم بتوليده عبر /export/openapi")
+    return FileResponse("openapi.json", media_type="application/json")
