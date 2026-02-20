@@ -1,0 +1,46 @@
+فحص الصحة (Health Check)
+
+    GET /health
+        التحقق من الحالة العامة للخدمة وقاعدة البيانات.
+
+2. الشركات (Company)
+
+    GET /company/list
+        إرجاع جميع الشركات مع أحدث سعر وتاريخ متوفر لكل رمز.
+
+    GET /company/latest
+        إرجاع بيانات جميع الرموز مع أحدث تاريخ في الجدول.
+
+    GET /company/symbol
+        إرجاع بيانات رمز معين خلال فترة زمنية محددة (اختياري date_from, date_to).
+
+    GET /company/range
+        إرجاع بيانات رمز معين لفترة مختارة (مثل week, month, year... إلخ).
+
+    GET /company/range/all
+        إرجاع بيانات جميع الشركات لفترة محددة (مثل week, month, year... إلخ).
+
+    GET /company/all
+        إرجاع جميع السجلات لجميع الشركات، مرتبة من الأحدث للأقدم.
+
+3. تغيرات يومية (DailyVariation)
+
+    GET /variation/symbol
+        إرجاع جميع السجلات الخاصة برمز معين من جدول DailyVariation مع إمكانية تعيين تاريخ البداية والنهاية (date_from, date_to اختياريان).
+
+    GET /variation/latest
+        إرجاع أحدث السجلات في جدول DailyVariation. إما لجميع الرموز أو رمز محدد إذا تم تمرير symbol.
+
+    GET /variation/recent
+        إرجاع آخر N (حسب الوسيط limit) من السجلات لرمز معين (رمز مطلوب، افتراضي limit=50).
+
+4. التوثيق وملفات OpenAPI
+
+    GET /openapi/samples
+        Endpoint لإرجاع أمثلة جاهزة لطلبات واستخدام الـ API.
+
+    GET /export/openapi
+        توليد وتصدير ملف OpenAPI JSON يصف التوثيق الكامل للنقاط.
+
+    GET /openapi.json
+        تنزيل ملف OpenAPI JSON الذي تم توليد
