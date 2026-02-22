@@ -403,7 +403,21 @@ def variation_recent(symbol: str = Query(...), limit: int = Query(50, ge=1, le=1
     rows_sorted = sort_desc_by_date(rows, key_field="timestamp")
     return {"symbol": symbol, "limit": limit, "count": len(rows_sorted), "rows": rows_sorted}
 
+# ---------------------------- 3)قائمة الرموز الشركات ---------------------------- #
 
+@app.get("/variation/symbols")
+def symbols_list():
+    """
+    إرجاع قائمة الرموز الشركات
+    """
+    if not os.path.exists(DB_PATH):
+        raise HTTPException(500, "قاعدة البيانات غير موجودة.")
+
+    conn = get_conn()
+    cur = conn.execute("SELECT DISTINCT symbol FROM Company")
+    rows = [dict(r) for r in cur.fetchall()]
+    return {"count": len(rows), "symbols": rows}
+    
 # ==================== OpenAPI export / serve ==================== #
 
 
